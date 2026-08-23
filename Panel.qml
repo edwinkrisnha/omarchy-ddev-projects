@@ -14,6 +14,7 @@ Item {
   property bool opened: false
 
   property var projects: []
+  property var gitDirty: ({})
   property string busyName: ""
   property string pendingAction: ""
   property string errorText: ""
@@ -58,13 +59,31 @@ Item {
         status: p.status || "unknown",
         path: p.shortroot || p.approot || "",
         approot: p.approot || "",
-        url: p.primary_url || p.httpsurl || p.httpurl || ""
+        url: p.primary_url || p.httpsurl || p.httpurl || "",
+        mailpitUrl: p.mailpit_https_url || p.mailpit_url || ""
       })
     }
     list.sort(function(a, b) { return a.name < b.name ? -1 : (a.name > b.name ? 1 : 0) })
     root.projects = list
     root.loaded = true
     root.errorText = ""
+    root.checkGitStatus()
+  }
+
+  function shQuote(s) {
+    return "'" + String(s).replace(/'/g, "'\\''") + "'"
+  }
+
+  function checkGitStatus() {
+    var running = root.projects.filter(function(p) { return p.status === "running" && p.approot !== "" })
+    if (running.length === 0) { root.gitDirty = {}; return }
+    var script = running.map(function(p) {
+      return "printf '%s\\t' " + root.shQuote(p.name) +
+        "; git -C " + root.shQuote(p.approot) + " status --porcelain 2>/dev/null | head -c1 | wc -c"
+    }).join("; ")
+    gitCheckProc.command = ["/usr/bin/timeout", "10", "/usr/bin/bash", "-c", script]
+    gitCheckProc.running = false
+    gitCheckProc.running = true
   }
 
   function runAction(name, action, args, cwd) {
@@ -95,6 +114,10 @@ Item {
     if (p.url) Qt.openUrlExternally(p.url)
   }
 
+  function launchMailpit(p) {
+    if (p.mailpitUrl) Qt.openUrlExternally(p.mailpitUrl)
+  }
+
   Process {
     id: listProc
     command: ["/usr/bin/ddev", "list", "--json-output"]
@@ -118,6 +141,22 @@ Item {
       root.busyName = ""
       root.pendingAction = ""
       root.reloadProjects()
+    }
+  }
+
+  // One combined "name<TAB>0-or-1" line per running project — cheaper than
+  // spawning a separate git process per row, and skips stopped projects
+  // since there's nothing actionable to warn about there.
+  Process {
+    id: gitCheckProc
+    stdout: SplitParser {
+      onRead: data => {
+        var parts = data.split("\t")
+        if (parts.length !== 2) return
+        var dirty = JSON.parse(JSON.stringify(root.gitDirty))
+        dirty[parts[0]] = parseInt(parts[1], 10) > 0
+        root.gitDirty = dirty
+      }
     }
   }
 
@@ -151,7 +190,7 @@ Item {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: popupPanel.fittedContentWidth(Style.space(380))
+    contentWidth: popupPanel.fittedContentWidth(Style.space(420))
     contentHeight: popupPanel.fittedContentHeight(column.implicitHeight, Style.space(480))
 
     PanelKeyCatcher {
@@ -255,14 +294,40 @@ Item {
                   Layout.fillWidth: true
                   spacing: Style.space(2)
 
-                  Text {
-                    text: card.modelData.name
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.bold: true
-                    font.pixelSize: Style.font.subtitle
-                    elide: Text.ElideRight
+                  Row {
                     width: parent.width
+                    spacing: Style.space(6)
+
+                    Text {
+                      text: card.modelData.name
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.bold: true
+                      font.pixelSize: Style.font.subtitle
+                      elide: Text.ElideRight
+                      width: Math.min(implicitWidth, parent.width - (dirtyBadge.visible ? dirtyBadge.width + Style.space(6) : 0))
+                    }
+
+                    Text {
+                      id: dirtyBadge
+                      visible: root.gitDirty[card.modelData.name] === true
+                      text: ""
+                      color: Color.urgent
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.bodySmall
+                      anchors.verticalCenter: parent.verticalCenter
+
+                      PanelToolTip {
+                        visible: dirtyMouse.containsMouse
+                        text: "Uncommitted changes in this project"
+                        fontFamily: root.fontFamily
+                      }
+                      MouseArea {
+                        id: dirtyMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                      }
+                    }
                   }
                   Text {
                     text: (card.isBusy
@@ -285,6 +350,14 @@ Item {
                   foreground: root.foreground
                   enabled: card.isRunning && card.modelData.url !== "" && root.busyName === ""
                   onClicked: root.launchProject(card.modelData)
+                }
+
+                PanelActionButton {
+                  iconText: ""
+                  tooltipText: "Open Mailpit (sent emails)"
+                  foreground: root.foreground
+                  enabled: card.isRunning && card.modelData.mailpitUrl !== "" && root.busyName === ""
+                  onClicked: root.launchMailpit(card.modelData)
                 }
 
                 PanelActionButton {
