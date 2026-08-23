@@ -156,7 +156,7 @@ Item {
 
   function openDbAdmin(p) {
     root.runAction(p.name, "dbadmin",
-      ["/usr/bin/timeout", "90", "/usr/bin/bash", "-c", "test -f .ddev/commands/host/adminer || ddev add-on get ddev/ddev-adminer; ddev adminer"],
+      ["/usr/bin/timeout", "90", "/usr/bin/bash", "-c", "test -f .ddev/commands/host/adminer || ddev add-on get ddev/ddev-adminer --version v1.4.1; ddev adminer"],
       p.approot)
   }
 
