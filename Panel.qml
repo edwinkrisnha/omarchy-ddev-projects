@@ -78,16 +78,16 @@ Item {
   }
 
   function startProject(name) {
-    root.runAction(name, "start", ["/usr/bin/ddev", "start", name], "")
+    root.runAction(name, "start", ["/usr/bin/timeout", "90", "/usr/bin/ddev", "start", name], "")
   }
 
   function stopProject(name) {
-    root.runAction(name, "stop", ["/usr/bin/ddev", "stop", name], "")
+    root.runAction(name, "stop", ["/usr/bin/timeout", "90", "/usr/bin/ddev", "stop", name], "")
   }
 
   function openDbAdmin(p) {
     root.runAction(p.name, "dbadmin",
-      ["/usr/bin/bash", "-c", "test -f .ddev/commands/host/adminer || ddev add-on get ddev/ddev-adminer; ddev adminer"],
+      ["/usr/bin/timeout", "90", "/usr/bin/bash", "-c", "test -f .ddev/commands/host/adminer || ddev add-on get ddev/ddev-adminer; ddev adminer"],
       p.approot)
   }
 
@@ -126,6 +126,22 @@ Item {
     repeat: true
     running: root.opened
     onTriggered: root.reloadProjects()
+  }
+
+  // Belt-and-suspenders: if a spawned action's exit somehow never reaches
+  // actionProc.onExited (a hang the "timeout" wrapper missed, or a
+  // Process/quickshell hiccup), this guarantees busyName always clears
+  // instead of permanently disabling every button in the panel.
+  Timer {
+    interval: 100000
+    repeat: false
+    running: root.busyName !== ""
+    onTriggered: {
+      root.errorText = "'" + root.pendingAction + "' timed out for " + root.busyName
+      root.busyName = ""
+      root.pendingAction = ""
+      root.reloadProjects()
+    }
   }
 
   KeyboardPanel {
