@@ -22,10 +22,12 @@ Item {
 
   property string newSitePath: "~/Work/"
   property bool creating: false
+  property bool createExpanded: false
   property string createStatus: ""
   property string createError: ""
   property string resultUser: ""
   property string resultPassword: ""
+  property string searchText: ""
 
   // Producer-side ceilings: without these, ddev/wp output flows straight
   // into a QML SplitParser, which buffers unbounded until it sees a split
@@ -45,6 +47,19 @@ Item {
     return n
   }
   readonly property int totalCount: projects.length
+
+  // Client-side filter/grouping over the already-capped, already-truncated
+  // project list — purely presentational, never touches the producer-side
+  // caps in applyListing/listProc.
+  readonly property var filteredProjects: {
+    var q = root.searchText.trim().toLowerCase()
+    if (q === "") return root.projects
+    return root.projects.filter(function(p) {
+      return p.name.toLowerCase().indexOf(q) !== -1 || p.type.toLowerCase().indexOf(q) !== -1
+    })
+  }
+  readonly property var runningProjects: root.filteredProjects.filter(function(p) { return p.status === "running" })
+  readonly property var stoppedProjects: root.filteredProjects.filter(function(p) { return p.status !== "running" })
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
@@ -115,6 +130,7 @@ Item {
 
   function createSite() {
     if (root.creating || root.busyName !== "") return
+    root.createExpanded = true
     var path = root.expandPath(root.newSitePath)
     if (path.indexOf("/") !== 0) {
       root.createError = "Enter an absolute path, e.g. ~/Work/my-new-site"
@@ -373,80 +389,135 @@ Item {
               anchors.margins: Style.space(10)
               spacing: Style.space(8)
 
-              Text {
-                text: "New WordPress Site"
-                font.bold: true
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-              }
-
-              Row {
+              MouseArea {
                 width: parent.width
-                spacing: Style.space(8)
+                height: newSiteHeader.implicitHeight
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.createExpanded = !root.createExpanded
 
-                TextField {
-                  id: pathField
-                  width: parent.width - createBtn.width - Style.space(8)
-                  text: root.newSitePath
-                  placeholderText: "~/Work/my-new-site"
-                  enabled: !root.creating
-                  onTextChanged: root.newSitePath = text
-                  onAccepted: root.createSite()
-                }
+                Row {
+                  id: newSiteHeader
+                  width: parent.width
+                  spacing: Style.space(6)
 
-                Button {
-                  id: createBtn
-                  text: root.creating ? "Creating…" : "Create"
-                  bordered: true
-                  foreground: root.foreground
-                  iconText: root.creating ? "↻" : "+"
-                  iconSpinning: root.creating
-                  enabled: !root.creating && root.busyName === ""
-                  onClicked: root.createSite()
+                  Text {
+                    text: root.createExpanded ? "▾" : "▸"
+                    color: Util.alpha(root.foreground, 0.6)
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                  }
+
+                  Text {
+                    text: "New WordPress Site"
+                    font.bold: true
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                  }
                 }
               }
 
-              Text {
-                visible: root.createStatus !== ""
-                text: root.createStatus
+              // Collapsed by default so opening the panel doesn't spend
+              // space on site creation before the more common status
+              // glance / start / stop. createSite() forces this open so
+              // progress and results are never hidden mid-flow.
+              Item {
+                id: newSiteBody
                 width: parent.width
-                wrapMode: Text.WordWrap
-                color: Util.alpha(root.foreground, 0.75)
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
+                clip: true
+                visible: height > 0
+                height: root.createExpanded ? newSiteBodyColumn.implicitHeight : 0
+                opacity: root.createExpanded ? 1 : 0
 
-              Text {
-                visible: root.createError !== ""
-                text: root.createError
-                width: parent.width
-                wrapMode: Text.WordWrap
-                color: Color.urgent
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              Column {
-                visible: root.resultPassword !== ""
-                width: parent.width
-                spacing: Style.space(2)
-
-                Text {
-                  text: "User: " + root.resultUser
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
+                Behavior on height {
+                  NumberAnimation { duration: 140; easing.type: Easing.OutCubic }
+                }
+                Behavior on opacity {
+                  NumberAnimation { duration: 140; easing.type: Easing.OutCubic }
                 }
 
-                Text {
-                  text: "Password: " + root.resultPassword
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
+                Column {
+                  id: newSiteBodyColumn
+                  width: parent.width
+                  spacing: Style.space(8)
+
+                  Row {
+                    width: parent.width
+                    spacing: Style.space(8)
+
+                    TextField {
+                      id: pathField
+                      width: parent.width - createBtn.width - Style.space(8)
+                      text: root.newSitePath
+                      placeholderText: "~/Work/my-new-site"
+                      enabled: !root.creating
+                      onTextChanged: root.newSitePath = text
+                      onAccepted: root.createSite()
+                    }
+
+                    Button {
+                      id: createBtn
+                      text: root.creating ? "Creating…" : "Create"
+                      bordered: true
+                      foreground: root.foreground
+                      iconText: root.creating ? "↻" : "+"
+                      iconSpinning: root.creating
+                      enabled: !root.creating && root.busyName === ""
+                      onClicked: root.createSite()
+                    }
+                  }
+
+                  Text {
+                    visible: root.createStatus !== ""
+                    text: root.createStatus
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    color: Util.alpha(root.foreground, 0.75)
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+
+                  Text {
+                    visible: root.createError !== ""
+                    text: root.createError
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    color: Color.urgent
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+
+                  Column {
+                    visible: root.resultPassword !== ""
+                    width: parent.width
+                    spacing: Style.space(2)
+
+                    Text {
+                      text: "User: " + root.resultUser
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+
+                    Text {
+                      text: "Password: " + root.resultPassword
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
                 }
               }
             }
+          }
+
+          TextField {
+            id: searchField
+            visible: root.totalCount > 6
+            width: parent.width
+            text: root.searchText
+            placeholderText: "Filter projects…"
+            onTextChanged: root.searchText = text
           }
 
           Text {
@@ -472,130 +543,175 @@ Item {
             font.pixelSize: Style.font.body
           }
 
+          Text {
+            visible: root.totalCount > 0 && root.filteredProjects.length === 0
+            width: parent.width
+            topPadding: Style.space(20)
+            bottomPadding: Style.space(20)
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+            text: "No projects match “" + root.searchText + "”."
+            color: Util.alpha(root.foreground, 0.7)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+          }
+
+          PanelSectionHeader {
+            visible: root.runningProjects.length > 0 && root.stoppedProjects.length > 0
+            width: parent.width
+            text: "Running — " + root.runningProjects.length
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
+
           Repeater {
-            model: root.projects
+            model: root.runningProjects
+            delegate: projectCardDelegate
+          }
 
-            Rectangle {
-              id: card
-              required property var modelData
-              width: column.width
-              implicitHeight: row.implicitHeight + Style.space(16)
-              height: implicitHeight
-              radius: Style.cornerRadius
-              color: Util.alpha(root.foreground, cardHover.hovered ? 0.06 : 0.03)
-              border.color: Util.alpha(root.foreground, 0.12)
-              border.width: 1
+          PanelSectionHeader {
+            visible: root.stoppedProjects.length > 0 && root.runningProjects.length > 0
+            width: parent.width
+            text: "Stopped — " + root.stoppedProjects.length
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
 
-              readonly property bool isRunning: modelData.status === "running"
-              readonly property bool isBusy: root.busyName === modelData.name
-
-              HoverHandler { id: cardHover }
-
-              RowLayout {
-                id: row
-                anchors.fill: parent
-                anchors.margins: Style.space(8)
-                spacing: Style.space(10)
-
-                Rectangle {
-                  width: Style.space(8)
-                  height: Style.space(8)
-                  radius: width / 2
-                  Layout.alignment: Qt.AlignVCenter
-                  color: card.isRunning ? Color.accent : Color.muted
-                }
-
-                Column {
-                  Layout.fillWidth: true
-                  spacing: Style.space(2)
-
-                  Row {
-                    width: parent.width
-                    spacing: Style.space(6)
-
-                    Text {
-                      text: card.modelData.name
-                      color: root.foreground
-                      font.family: root.fontFamily
-                      font.bold: true
-                      font.pixelSize: Style.font.subtitle
-                      elide: Text.ElideRight
-                      width: Math.min(implicitWidth, parent.width - (dirtyBadge.visible ? dirtyBadge.width + Style.space(6) : 0))
-                    }
-
-                    Text {
-                      id: dirtyBadge
-                      visible: root.gitDirty[card.modelData.name] === true
-                      text: ""
-                      color: Color.urgent
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.bodySmall
-                      anchors.verticalCenter: parent.verticalCenter
-
-                      PanelToolTip {
-                        visible: dirtyMouse.containsMouse
-                        text: "Uncommitted changes in this project"
-                        fontFamily: root.fontFamily
-                      }
-                      MouseArea {
-                        id: dirtyMouse
-                        anchors.fill: parent
-                        hoverEnabled: true
-                      }
-                    }
-                  }
-                  Text {
-                    text: (card.isBusy
-                      ? (root.pendingAction === "start" ? "Starting…"
-                        : root.pendingAction === "stop" ? "Stopping…"
-                        : "Opening DB Admin (may install & restart)…")
-                      : (card.modelData.type + " · " + card.modelData.status))
-                      + (card.modelData.path ? "  ·  " + card.modelData.path : "")
-                    color: Util.alpha(root.foreground, 0.65)
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    elide: Text.ElideRight
-                    width: parent.width
-                  }
-                }
-
-                PanelActionButton {
-                  iconText: "↗"
-                  tooltipText: "Open in browser"
-                  foreground: root.foreground
-                  enabled: card.isRunning && card.modelData.url !== "" && root.busyName === ""
-                  onClicked: root.launchProject(card.modelData)
-                }
-
-                PanelActionButton {
-                  iconText: ""
-                  tooltipText: "Open Mailpit (sent emails)"
-                  foreground: root.foreground
-                  enabled: card.isRunning && card.modelData.mailpitUrl !== "" && root.busyName === ""
-                  onClicked: root.launchMailpit(card.modelData)
-                }
-
-                PanelActionButton {
-                  iconText: ""
-                  tooltipText: "Open DB Admin (Adminer) — installs and restarts the project on first use"
-                  foreground: root.foreground
-                  enabled: card.isRunning && root.busyName === ""
-                  onClicked: root.openDbAdmin(card.modelData)
-                }
-
-                PanelActionButton {
-                  iconText: card.isBusy ? "…" : (card.isRunning ? "■" : "▶")
-                  tooltipText: card.isRunning ? "Stop" : "Start"
-                  foreground: root.foreground
-                  hoverColor: card.isRunning ? Color.urgent : root.foreground
-                  enabled: !card.isBusy && root.busyName === ""
-                  onClicked: card.isRunning ? root.stopProject(card.modelData.name) : root.startProject(card.modelData.name)
-                }
-              }
-            }
+          Repeater {
+            model: root.stoppedProjects
+            delegate: projectCardDelegate
           }
         }
       }
     }
   }
+
+  // Shared by both the Running and Stopped Repeaters above — kept outside
+  // the scrolling Column so it isn't laid out itself, just instantiated by
+  // each Repeater. `column.width` below still resolves: ids are scoped to
+  // the whole file, not just their parent.
+  Component {
+    id: projectCardDelegate
+
+    Rectangle {
+      id: card
+      required property var modelData
+      width: column.width
+      implicitHeight: row.implicitHeight + Style.space(16)
+      height: implicitHeight
+      radius: Style.cornerRadius
+      color: Util.alpha(root.foreground, cardHover.hovered ? 0.06 : 0.03)
+      border.color: Util.alpha(root.foreground, 0.12)
+      border.width: 1
+
+      readonly property bool isRunning: modelData.status === "running"
+      readonly property bool isBusy: root.busyName === modelData.name
+
+      HoverHandler { id: cardHover }
+
+      RowLayout {
+        id: row
+        anchors.fill: parent
+        anchors.margins: Style.space(8)
+        spacing: Style.space(10)
+
+        Rectangle {
+          width: Style.space(8)
+          height: Style.space(8)
+          radius: width / 2
+          Layout.alignment: Qt.AlignVCenter
+          color: card.isRunning ? Color.accent : Color.muted
+        }
+
+        Column {
+          Layout.fillWidth: true
+          spacing: Style.space(2)
+
+          Row {
+            width: parent.width
+            spacing: Style.space(6)
+
+            Text {
+              text: card.modelData.name
+              color: root.foreground
+              font.family: root.fontFamily
+              font.bold: true
+              font.pixelSize: Style.font.subtitle
+              elide: Text.ElideRight
+              width: Math.min(implicitWidth, parent.width - (dirtyBadge.visible ? dirtyBadge.width + Style.space(6) : 0))
+            }
+
+            Text {
+              id: dirtyBadge
+              visible: root.gitDirty[card.modelData.name] === true
+              text: ""
+              color: Color.urgent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              anchors.verticalCenter: parent.verticalCenter
+
+              PanelToolTip {
+                visible: dirtyMouse.containsMouse
+                text: "Uncommitted changes in this project"
+                fontFamily: root.fontFamily
+              }
+              MouseArea {
+                id: dirtyMouse
+                anchors.fill: parent
+                hoverEnabled: true
+              }
+            }
+          }
+          Text {
+            text: (card.isBusy
+            ? (root.pendingAction === "start" ? "Starting…"
+            : root.pendingAction === "stop" ? "Stopping…"
+            : "Opening DB Admin (may install & restart)…")
+            : (card.modelData.type + " · " + card.modelData.status))
+            + (card.modelData.path ? "  ·  " + card.modelData.path : "")
+            color: Util.alpha(root.foreground, 0.65)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideRight
+            width: parent.width
+          }
+        }
+
+        PanelActionButton {
+          iconText: "↗"
+          tooltipText: "Open in browser"
+          foreground: root.foreground
+          enabled: card.isRunning && card.modelData.url !== "" && root.busyName === ""
+          onClicked: root.launchProject(card.modelData)
+        }
+
+        PanelActionButton {
+          iconText: ""
+          tooltipText: "Open Mailpit (sent emails)"
+          foreground: root.foreground
+          enabled: card.isRunning && card.modelData.mailpitUrl !== "" && root.busyName === ""
+          onClicked: root.launchMailpit(card.modelData)
+        }
+
+        PanelActionButton {
+          iconText: ""
+          tooltipText: "Open DB Admin (Adminer) — installs and restarts the project on first use"
+          foreground: root.foreground
+          enabled: card.isRunning && root.busyName === ""
+          onClicked: root.openDbAdmin(card.modelData)
+        }
+
+        PanelActionButton {
+          iconText: card.isBusy ? "…" : (card.isRunning ? "■" : "▶")
+          tooltipText: card.isRunning ? "Stop" : "Start"
+          foreground: root.foreground
+          hoverColor: card.isRunning ? Color.urgent : root.foreground
+          enabled: !card.isBusy && root.busyName === ""
+          onClicked: card.isRunning ? root.stopProject(card.modelData.name) : root.startProject(card.modelData.name)
+        }
+      }
+    }
+  }
 }
+
+
