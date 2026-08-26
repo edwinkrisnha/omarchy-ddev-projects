@@ -27,6 +27,18 @@ Item {
   property string resultUser: ""
   property string resultPassword: ""
 
+  // Producer-side ceilings: without these, ddev/wp output flows straight
+  // into a QML SplitParser, which buffers unbounded until it sees a split
+  // marker. A huge project listing or a verbose/hijacked command could
+  // otherwise grow the parser's buffer without limit.
+  readonly property int maxListBytes: 5 * 1024 * 1024
+  readonly property int maxListProjects: 500
+  readonly property int maxFieldLength: 200
+  // approot is used functionally as a cwd (cd, git -C), not just displayed,
+  // so it gets Linux's own PATH_MAX instead of the display-field cap.
+  readonly property int maxPathLength: 4096
+  readonly property int maxCreateBytes: 10 * 1024 * 1024
+
   readonly property int runningCount: {
     var n = 0
     for (var i = 0; i < projects.length; i++) if (projects[i].status === "running") n++
@@ -55,25 +67,39 @@ Item {
     if (!listProc.running) listProc.running = true
   }
 
+  function truncateField(s) {
+    s = String(s)
+    return s.length > root.maxFieldLength ? s.slice(0, root.maxFieldLength) : s
+  }
+
+  function truncatePath(s) {
+    s = String(s)
+    return s.length > root.maxPathLength ? s.slice(0, root.maxPathLength) : s
+  }
+
   function applyListing(raw) {
     var list = []
-    for (var i = 0; i < raw.length; i++) {
+    var overflow = raw.length > root.maxListProjects
+    var limit = Math.min(raw.length, root.maxListProjects)
+    for (var i = 0; i < limit; i++) {
       var p = raw[i]
       if (!p || !p.name) continue
       list.push({
-        name: p.name,
-        type: p.type || "",
-        status: p.status || "unknown",
-        path: p.shortroot || p.approot || "",
-        approot: p.approot || "",
-        url: p.primary_url || p.httpsurl || p.httpurl || "",
-        mailpitUrl: p.mailpit_https_url || p.mailpit_url || ""
+        name: root.truncateField(p.name),
+        type: root.truncateField(p.type || ""),
+        status: root.truncateField(p.status || "unknown"),
+        path: root.truncateField(p.shortroot || p.approot || ""),
+        approot: root.truncatePath(p.approot || ""),
+        url: root.truncateField(p.primary_url || p.httpsurl || p.httpurl || ""),
+        mailpitUrl: root.truncateField(p.mailpit_https_url || p.mailpit_url || "")
       })
     }
     list.sort(function(a, b) { return a.name < b.name ? -1 : (a.name > b.name ? 1 : 0) })
     root.projects = list
     root.loaded = true
-    root.errorText = ""
+    root.errorText = overflow
+      ? ("Showing first " + root.maxListProjects + " of " + raw.length + " projects")
+      : ""
     root.checkGitStatus()
   }
 
@@ -111,7 +137,13 @@ Item {
       "ddev wp core install --url=\"$PRIMARY_URL\" --title=" + title +
         " --admin_user=admin --admin_password=admin --admin_email=admin@example.com"
     ].join(" && ")
-    createProc.command = ["/usr/bin/timeout", "240", "/usr/bin/bash", "-c", script]
+    // Cap stdout before it ever reaches QML's SplitParser: fold bounds any
+    // single line's length (so the parser never buffers an unterminated
+    // line without limit) and head -c rejects output past a hard byte
+    // ceiling instead of letting it accumulate indefinitely.
+    var capped = "( " + script + " ) | /usr/bin/tr '\\r' '\\n' | /usr/bin/fold -w " +
+      root.maxFieldLength + " | /usr/bin/head -c " + root.maxCreateBytes
+    createProc.command = ["/usr/bin/timeout", "240", "/usr/bin/bash", "-o", "pipefail", "-c", capped]
     createProc.running = false
     createProc.running = true
   }
@@ -170,9 +202,17 @@ Item {
 
   Process {
     id: listProc
-    command: ["/usr/bin/ddev", "list", "--json-output"]
+    // head -c rejects listing output past a hard byte ceiling before it
+    // ever reaches QML's SplitParser, instead of letting an unbounded
+    // local project listing grow the parser's buffer without limit.
+    command: ["/usr/bin/timeout", "30", "/usr/bin/bash", "-c",
+      "/usr/bin/ddev list --json-output | /usr/bin/head -c " + root.maxListBytes]
     stdout: SplitParser {
       onRead: data => {
+        if (data.length >= root.maxListBytes) {
+          root.errorText = "Project listing too large to display safely"
+          return
+        }
         try {
           const obj = JSON.parse(data)
           if (obj && obj.raw) root.applyListing(obj.raw)
@@ -197,7 +237,7 @@ Item {
   Process {
     id: createProc
     stdout: SplitParser {
-      onRead: data => { root.createStatus = data }
+      onRead: data => { root.createStatus = root.truncateField(data) }
     }
     onExited: function(exitCode) {
       root.creating = false
