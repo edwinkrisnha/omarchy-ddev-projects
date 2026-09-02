@@ -216,6 +216,10 @@ Item {
     if (p.mailpitUrl) Qt.openUrlExternally(p.mailpitUrl)
   }
 
+  function launchFolder(p) {
+    if (p.approot) Qt.openUrlExternally(Util.fileUrl(p.approot))
+  }
+
   Process {
     id: listProc
     // head -c rejects listing output past a hard byte ceiling before it
@@ -683,6 +687,14 @@ Item {
           foreground: root.foreground
           enabled: card.isRunning && card.modelData.url !== "" && root.busyName === ""
           onClicked: root.launchProject(card.modelData)
+        }
+
+        PanelActionButton {
+          iconText: ""
+          tooltipText: "Open folder"
+          foreground: root.foreground
+          enabled: card.modelData.approot !== "" && root.busyName === ""
+          onClicked: root.launchFolder(card.modelData)
         }
 
         PanelActionButton {
