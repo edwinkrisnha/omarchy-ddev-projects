@@ -414,13 +414,27 @@ Item {
             spacing: Style.space(6)
 
             Text {
+              id: nameText
               text: card.modelData.name
               color: root.foreground
               font.family: root.fontFamily
               font.bold: true
               font.pixelSize: Style.font.subtitle
               elide: Text.ElideRight
-              width: Math.min(implicitWidth, parent.width - (dirtyBadge.visible ? dirtyBadge.width + Style.space(6) : 0))
+              // Long names elide first so the type and dirty badge stay visible.
+              width: Math.min(implicitWidth, parent.width
+                - (typeText.visible ? typeText.width + Style.space(6) : 0)
+                - (dirtyBadge.visible ? dirtyBadge.width + Style.space(6) : 0))
+            }
+
+            Text {
+              id: typeText
+              visible: card.modelData.type !== ""
+              text: card.modelData.type
+              color: Util.alpha(root.foreground, 0.55)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              anchors.baseline: nameText.baseline
             }
 
             Text {
@@ -445,12 +459,18 @@ Item {
             }
           }
           Text {
-            text: (card.isBusy
-            ? (root.pendingAction === "start" ? "Starting…"
-            : root.pendingAction === "stop" ? "Stopping…"
-            : "Opening DB Admin (may install & restart)…")
-            : (card.modelData.type + " · " + card.modelData.status))
-            + (card.modelData.path ? "  ·  " + card.modelData.path : "")
+            // The status dot already shows running vs stopped, so only
+            // spell out a status when it's something else (e.g. paused).
+            // The project type lives on the name row above.
+            text: [
+              card.isBusy
+                ? (root.pendingAction === "start" ? "Starting…"
+                  : root.pendingAction === "stop" ? "Stopping…"
+                  : "Opening DB Admin (may install & restart)…")
+                : ((card.modelData.status === "running" || card.modelData.status === "stopped")
+                  ? "" : card.modelData.status),
+              card.modelData.path
+            ].filter(function(s) { return s !== "" }).join(" · ")
             color: Util.alpha(root.foreground, 0.65)
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
