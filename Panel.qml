@@ -492,12 +492,28 @@ Item {
         }
 
         PanelActionButton {
-          iconText: card.isBusy ? "" : (card.isRunning ? "" : "")
+          id: powerButton
+          iconText: card.isBusy ?"" : (card.isRunning ? "" : "")
           tooltipText: card.isRunning ? "Stop" : "Start"
           foreground: root.foreground
           hoverColor: card.isRunning ? Color.urgent : root.foreground
           enabled: !card.isBusy && root.busyName === ""
           onClicked: card.isRunning ? root.stopProject(card.modelData.name) : root.startProject(card.modelData.name)
+
+          // Spin the busy spinner glyph, matching Ui/Button's iconSpinning.
+          // Rotating the whole button is safe: it's disabled while busy, so
+          // it has no hover fill or border to visibly turn with it.
+          transformOrigin: Item.Center
+          RotationAnimation on rotation {
+            from: 0
+            to: 360
+            duration: Style.duration(900)
+            loops: Animation.Infinite
+            running: card.isBusy && !Style.reduceMotion
+            // Snap back upright so the play/stop glyph that replaces the
+            // spinner isn't left tilted at whatever angle it stopped on.
+            onRunningChanged: if (!running) powerButton.rotation = 0
+          }
         }
       }
     }
