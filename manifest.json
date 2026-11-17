@@ -5,7 +5,7 @@
   "version": "1.1.0",
   "author": "Edwin Krisnha",
   "license": "MIT",
-  "description": "Manage local DDEV projects from the bar — start/stop, open in browser, Mailpit, Adminer, and scaffold new WordPress sites",
+  "description": "Manage local DDEV projects from the bar — start/stop, open in browser, project folder, Mailpit, and Adminer",
   "kinds": [
     "bar-widget"
   ],

@@ -20,16 +20,9 @@ Item {
   property string errorText: ""
   property bool loaded: false
 
-  property string newSitePath: "~/Work/"
-  property bool creating: false
-  property bool createExpanded: false
-  property string createStatus: ""
-  property string createError: ""
-  property string resultUser: ""
-  property string resultPassword: ""
   property string searchText: ""
 
-  // Producer-side ceilings: without these, ddev/wp output flows straight
+  // Producer-side ceilings: without these, ddev output flows straight
   // into a QML SplitParser, which buffers unbounded until it sees a split
   // marker. A huge project listing or a verbose/hijacked command could
   // otherwise grow the parser's buffer without limit.
@@ -39,7 +32,6 @@ Item {
   // approot is used functionally as a cwd (cd, git -C), not just displayed,
   // so it gets Linux's own PATH_MAX instead of the display-field cap.
   readonly property int maxPathLength: 4096
-  readonly property int maxCreateBytes: 10 * 1024 * 1024
 
   readonly property int runningCount: {
     var n = 0
@@ -120,56 +112,6 @@ Item {
 
   function shQuote(s) {
     return "'" + String(s).replace(/'/g, "'\\''") + "'"
-  }
-
-  function expandPath(p) {
-    var s = String(p).trim()
-    if (s.indexOf("~") === 0) s = Quickshell.env("HOME") + s.slice(1)
-    return s.replace(/\/+$/, "")
-  }
-
-  function createSite() {
-    if (root.creating || root.busyName !== "") return
-    root.createExpanded = true
-    var path = root.expandPath(root.newSitePath)
-    if (path.indexOf("/") !== 0) {
-      root.createError = "Enter an absolute path, e.g. ~/Work/my-new-site"
-      return
-    }
-    root.creating = true
-    root.createError = ""
-    root.resultUser = ""
-    root.resultPassword = ""
-    root.createStatus = "Setting up " + path + " …"
-    var title = root.shQuote(path.split("/").pop())
-    var script = [
-      "set -e",
-      "mkdir -p " + root.shQuote(path),
-      "cd " + root.shQuote(path),
-      "ddev config --project-type=wordpress --docroot=.",
-      "ddev start",
-      "ddev wp core download",
-      "PRIMARY_URL=$(ddev describe -j | jq -r '.raw.primary_url')",
-      "ddev wp core install --url=\"$PRIMARY_URL\" --title=" + title +
-        " --admin_user=admin --admin_password=admin --admin_email=admin@example.com"
-    ].join(" && ")
-    // Cap stdout before it ever reaches QML's SplitParser: fold bounds any
-    // single line's length (so the parser never buffers an unterminated
-    // line without limit) and head -c rejects output past a hard byte
-    // ceiling instead of letting it accumulate indefinitely.
-    var capped = "( " + script + " ) | /usr/bin/tr '\\r' '\\n' | /usr/bin/fold -w " +
-      root.maxFieldLength + " | /usr/bin/head -c " + root.maxCreateBytes
-    createProc.command = ["/usr/bin/timeout", "240", "/usr/bin/bash", "-o", "pipefail", "-c", capped]
-    createProc.running = false
-    createProc.running = true
-  }
-
-  function manualRefresh() {
-    root.resultUser = ""
-    root.resultPassword = ""
-    root.createStatus = ""
-    root.createError = ""
-    root.reloadProjects()
   }
 
   function checkGitStatus() {
@@ -261,40 +203,6 @@ Item {
     }
   }
 
-  Process {
-    id: createProc
-    stdout: SplitParser {
-      onRead: data => { root.createStatus = root.truncateField(data) }
-    }
-    onExited: function(exitCode) {
-      root.creating = false
-      if (exitCode !== 0) {
-        root.createError = "Site creation failed (exit " + exitCode + "). Check the path/name and try again."
-        root.createStatus = ""
-      } else {
-        root.createStatus = "Site created successfully."
-        root.resultUser = "admin"
-        root.resultPassword = "admin"
-        root.newSitePath = "~/Work/"
-        root.reloadProjects()
-      }
-    }
-  }
-
-  // Same belt-and-suspenders reasoning as the busyName watchdog below —
-  // "creating" is a separate flag (the site doesn't exist as a project row
-  // yet) so it needs its own guard against a hang the timeout wrapper missed.
-  Timer {
-    interval: 250000
-    repeat: false
-    running: root.creating
-    onTriggered: {
-      root.createError = "Site creation timed out."
-      root.createStatus = ""
-      root.creating = false
-    }
-  }
-
   // One combined "name<TAB>0-or-1" line per running project — cheaper than
   // spawning a separate git process per row, and skips stopped projects
   // since there's nothing actionable to warn about there.
@@ -380,144 +288,7 @@ Item {
                 iconText: "↻"
                 tooltipText: "Refresh"
                 foreground: root.foreground
-                onClicked: root.manualRefresh()
-              }
-            }
-          }
-
-          Rectangle {
-            width: parent.width
-            implicitHeight: newSiteColumn.implicitHeight + Style.space(20)
-            height: implicitHeight
-            radius: Style.cornerRadius
-            color: Util.alpha(root.foreground, 0.04)
-            border.color: Util.alpha(root.foreground, 0.15)
-            border.width: 1
-
-            Column {
-              id: newSiteColumn
-              anchors.fill: parent
-              anchors.margins: Style.space(10)
-              spacing: Style.space(8)
-
-              MouseArea {
-                width: parent.width
-                height: newSiteHeader.implicitHeight
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.createExpanded = !root.createExpanded
-
-                Row {
-                  id: newSiteHeader
-                  width: parent.width
-                  spacing: Style.space(6)
-
-                  Text {
-                    text: root.createExpanded ? "▾" : "▸"
-                    color: Util.alpha(root.foreground, 0.6)
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                  }
-
-                  Text {
-                    text: "New WordPress Site"
-                    font.bold: true
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                  }
-                }
-              }
-
-              // Collapsed by default so opening the panel doesn't spend
-              // space on site creation before the more common status
-              // glance / start / stop. createSite() forces this open so
-              // progress and results are never hidden mid-flow.
-              Item {
-                id: newSiteBody
-                width: parent.width
-                clip: true
-                visible: height > 0
-                height: root.createExpanded ? newSiteBodyColumn.implicitHeight : 0
-                opacity: root.createExpanded ? 1 : 0
-
-                Behavior on height {
-                  NumberAnimation { duration: 140; easing.type: Easing.OutCubic }
-                }
-                Behavior on opacity {
-                  NumberAnimation { duration: 140; easing.type: Easing.OutCubic }
-                }
-
-                Column {
-                  id: newSiteBodyColumn
-                  width: parent.width
-                  spacing: Style.space(8)
-
-                  Row {
-                    width: parent.width
-                    spacing: Style.space(8)
-
-                    TextField {
-                      id: pathField
-                      width: parent.width - createBtn.width - Style.space(8)
-                      text: root.newSitePath
-                      placeholderText: "~/Work/my-new-site"
-                      enabled: !root.creating
-                      onTextChanged: root.newSitePath = text
-                      onAccepted: root.createSite()
-                    }
-
-                    Button {
-                      id: createBtn
-                      text: root.creating ? "Creating…" : "Create"
-                      bordered: true
-                      foreground: root.foreground
-                      iconText: root.creating ? "↻" : "+"
-                      iconSpinning: root.creating
-                      enabled: !root.creating && root.busyName === ""
-                      onClicked: root.createSite()
-                    }
-                  }
-
-                  Text {
-                    visible: root.createStatus !== ""
-                    text: root.createStatus
-                    width: parent.width
-                    wrapMode: Text.WordWrap
-                    color: Util.alpha(root.foreground, 0.75)
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                  }
-
-                  Text {
-                    visible: root.createError !== ""
-                    text: root.createError
-                    width: parent.width
-                    wrapMode: Text.WordWrap
-                    color: Color.urgent
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                  }
-
-                  Column {
-                    visible: root.resultPassword !== ""
-                    width: parent.width
-                    spacing: Style.space(2)
-
-                    Text {
-                      text: "User: " + root.resultUser
-                      color: root.foreground
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                    }
-
-                    Text {
-                      text: "Password: " + root.resultPassword
-                      color: root.foreground
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                    }
-                  }
-                }
+                onClicked: root.reloadProjects()
               }
             }
           }
