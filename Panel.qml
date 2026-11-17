@@ -285,7 +285,7 @@ Item {
             }
             trailingControl: Component {
               PanelActionButton {
-                iconText: "↻"
+                iconText: ""
                 tooltipText: "Refresh"
                 foreground: root.foreground
                 onClicked: root.reloadProjects()
@@ -460,7 +460,7 @@ Item {
         }
 
         PanelActionButton {
-          iconText: "↗"
+          iconText: ""
           tooltipText: "Open in browser"
           foreground: root.foreground
           enabled: card.isRunning && card.modelData.url !== "" && root.busyName === ""
@@ -492,7 +492,7 @@ Item {
         }
 
         PanelActionButton {
-          iconText: card.isBusy ? "…" : (card.isRunning ? "■" : "▶")
+          iconText: card.isBusy ? "" : (card.isRunning ? "" : "")
           tooltipText: card.isRunning ? "Stop" : "Start"
           foreground: root.foreground
           hoverColor: card.isRunning ? Color.urgent : root.foreground
