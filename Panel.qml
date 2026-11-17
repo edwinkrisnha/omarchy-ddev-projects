@@ -175,6 +175,13 @@ Item {
   function checkGitStatus() {
     var running = root.projects.filter(function(p) { return p.status === "running" && p.approot !== "" })
     if (running.length === 0) { root.gitDirty = {}; return }
+    // Drop entries for projects that are no longer running so a stopped
+    // project never carries a stale dirty flag.
+    var pruned = {}
+    running.forEach(function(p) {
+      if (root.gitDirty[p.name] !== undefined) pruned[p.name] = root.gitDirty[p.name]
+    })
+    root.gitDirty = pruned
     var script = running.map(function(p) {
       return "printf '%s\\t' " + root.shQuote(p.name) +
         "; git -C " + root.shQuote(p.approot) + " status --porcelain 2>/dev/null | head -c1 | wc -c"
@@ -274,7 +281,7 @@ Item {
     }
   }
 
-  // Same belt-and-suspenders reasoning as the busyName watchdog above —
+  // Same belt-and-suspenders reasoning as the busyName watchdog below —
   // "creating" is a separate flag (the site doesn't exist as a project row
   // yet) so it needs its own guard against a hang the timeout wrapper missed.
   Timer {
@@ -647,7 +654,7 @@ Item {
 
             Text {
               id: dirtyBadge
-              visible: root.gitDirty[card.modelData.name] === true
+              visible: card.isRunning && root.gitDirty[card.modelData.name] === true
               text: ""
               color: Color.urgent
               font.family: root.fontFamily
@@ -725,5 +732,3 @@ Item {
     }
   }
 }
-
-
