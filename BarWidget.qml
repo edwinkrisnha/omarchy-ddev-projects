@@ -4,7 +4,7 @@ import qs.Ui
 
 BarWidget {
   id: root
-  moduleName: "tony.ddev-projects"
+  moduleName: "edwin.ddev-projects"
 
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
   readonly property int runningCount: panelLoader.item ? panelLoader.item.runningCount : 0

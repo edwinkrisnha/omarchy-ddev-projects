@@ -1,11 +1,19 @@
-# DDEV Projects
+# DDEV Manager
+
+> Forked from [sanjayatony/omarchy-ddev-projects](https://github.com/sanjayatony/omarchy-ddev-projects) by Tony S.
 
 A Herd-style bar widget for managing local [DDEV](https://ddev.com/) projects from the Omarchy bar — start/stop projects, open a database admin tool, check sent email, and scaffold new WordPress sites, without leaving the bar.
+
+## Requirements
+
+- [DDEV](https://ddev.com/) at `/usr/bin/ddev` (e.g. the `ddev-bin` AUR package) with a running Docker daemon
+- `jq` (used by **New WordPress Site**)
+- `git` (for the uncommitted-changes badge)
 
 ## Install
 
 ```sh
-omarchy plugin add https://github.com/sanjayatony/omarchy-ddev-projects.git --enable
+omarchy plugin add https://github.com/edwinkrisnha/omarchy-ddev-projects.git --enable
 ```
 
 Choose a bar section when prompted (right is the default).
@@ -26,7 +34,7 @@ At the top of the panel, **New WordPress Site** creates a fresh WordPress instal
 
 ## Configuration
 
-No configuration file — the panel always reflects live `ddev list` output. There's nothing to set in `shell.json` beyond the widget's placement (`omarchy bar move tony.ddev-projects --section <left|center|right>`).
+No configuration file — the panel always reflects live `ddev list` output. There's nothing to set in `shell.json` beyond the widget's placement (`omarchy bar move edwin.ddev-projects --section <left|center|right>`).
 
 ## Notes
 
@@ -37,7 +45,7 @@ No configuration file — the panel always reflects live `ddev list` output. The
 ## Removal
 
 ```sh
-omarchy plugin remove tony.ddev-projects
+omarchy plugin remove edwin.ddev-projects
 ```
 
 This only removes the plugin — it does not touch any DDEV projects, containers, or data.
