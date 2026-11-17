@@ -17,8 +17,30 @@ Item {
   property var gitDirty: ({})
   property string busyName: ""
   property string pendingAction: ""
-  property string errorText: ""
+  property int pendingTimeout: 0
   property bool loaded: false
+
+  // Listing problems (DDEV/Docker unreachable, oversized output) and action
+  // failures are tracked separately: every successful listing resets
+  // listError, so an action failure stored there would vanish within a
+  // second of being shown. actionError lives until the next action or a
+  // manual refresh.
+  property string listError: ""
+  property string actionError: ""
+  // True when the last listing attempt failed after an earlier success —
+  // the cards then show the last known state, which may no longer be true.
+  property bool listStale: false
+  property bool listGotData: false
+
+  // The git dirty check spawns a git process per running project, so it
+  // runs on open, manual refresh, and after actions, plus at most every
+  // 30s otherwise — not on every 10s listing poll.
+  property bool gitCheckDue: true
+  property real lastGitCheck: 0
+  readonly property int gitCheckInterval: 30000
+
+  // Sentinel busyName for actions that aren't tied to one project card.
+  readonly property string allProjects: "*"
 
   property string searchText: ""
 
@@ -58,6 +80,7 @@ Item {
 
   function open() {
     root.opened = true
+    root.gitCheckDue = true
     reloadProjects()
   }
 
@@ -71,7 +94,15 @@ Item {
   }
 
   function reloadProjects() {
-    if (!listProc.running) listProc.running = true
+    if (listProc.running) return
+    root.listGotData = false
+    listProc.running = true
+  }
+
+  function manualRefresh() {
+    root.actionError = ""
+    root.gitCheckDue = true
+    root.reloadProjects()
   }
 
   function truncateField(s) {
@@ -104,10 +135,13 @@ Item {
     list.sort(function(a, b) { return a.name < b.name ? -1 : (a.name > b.name ? 1 : 0) })
     root.projects = list
     root.loaded = true
-    root.errorText = overflow
+    root.listGotData = true
+    root.listStale = false
+    root.listError = overflow
       ? ("Showing first " + root.maxListProjects + " of " + raw.length + " projects")
       : ""
-    root.checkGitStatus()
+    if (root.gitCheckDue || Date.now() - root.lastGitCheck >= root.gitCheckInterval)
+      root.checkGitStatus()
   }
 
   function shQuote(s) {
@@ -115,6 +149,8 @@ Item {
   }
 
   function checkGitStatus() {
+    root.gitCheckDue = false
+    root.lastGitCheck = Date.now()
     var running = root.projects.filter(function(p) { return p.status === "running" && p.approot !== "" })
     if (running.length === 0) { root.gitDirty = {}; return }
     // Drop entries for projects that are no longer running so a stopped
@@ -133,32 +169,85 @@ Item {
     gitCheckProc.running = true
   }
 
-  function runAction(name, action, args, cwd) {
+  function notify(title, body) {
+    Quickshell.execDetached(["/usr/bin/notify-send", "-a", "DDEV Manager", title, body || ""])
+  }
+
+  // Human-readable subject for messages: a project name, or "all projects"
+  // for the poweroff sentinel.
+  function subjectOf(name) {
+    return name === root.allProjects ? "all projects" : name
+  }
+
+  // Every action runs under `timeout`; the watchdog Timer below uses the
+  // same per-action value (+10s) so a deliberately long timeout (DB Admin's
+  // first-run install) is never cut short by the watchdog.
+  function runAction(name, action, args, cwd, timeoutSecs) {
     if (root.busyName !== "") return
-    root.busyName = name
+    root.actionError = ""
+    root.pendingTimeout = timeoutSecs
     root.pendingAction = action
-    actionProc.command = args
+    root.busyName = name
+    actionProc.command = ["/usr/bin/timeout", String(timeoutSecs)].concat(args)
     actionProc.workingDirectory = cwd || ""
     actionProc.running = false
     actionProc.running = true
   }
 
+  function finishAction(exitCode) {
+    var action = root.pendingAction
+    var subject = root.subjectOf(root.busyName)
+    if (exitCode !== 0) {
+      root.actionError = exitCode === 124
+        ? ("ddev " + action + " timed out for " + subject + " after " + root.pendingTimeout + "s")
+        : ("ddev " + action + " failed for " + subject + " (exit " + exitCode + ")")
+      root.notify("DDEV: " + action + " failed", root.actionError)
+    } else if (action === "start") {
+      root.notify("DDEV: " + subject + " is running", "")
+    } else if (action === "stop") {
+      root.notify("DDEV: " + subject + " stopped", "")
+    } else if (action === "poweroff") {
+      root.notify("DDEV: all projects stopped", "")
+    }
+    root.busyName = ""
+    root.pendingAction = ""
+    root.gitCheckDue = true
+    root.reloadProjects()
+  }
+
   function startProject(name) {
-    root.runAction(name, "start", ["/usr/bin/timeout", "90", "/usr/bin/ddev", "start", name], "")
+    // Generous: a first start may pull images.
+    root.runAction(name, "start", ["/usr/bin/ddev", "start", name], "", 180)
   }
 
   function stopProject(name) {
-    root.runAction(name, "stop", ["/usr/bin/timeout", "90", "/usr/bin/ddev", "stop", name], "")
+    root.runAction(name, "stop", ["/usr/bin/ddev", "stop", name], "", 90)
+  }
+
+  function powerOffAll() {
+    root.runAction(root.allProjects, "poweroff", ["/usr/bin/ddev", "poweroff"], "", 120)
   }
 
   function openDbAdmin(p) {
+    // First use installs the add-on and restarts the project, which can
+    // take a while on a slow image pull.
     root.runAction(p.name, "dbadmin",
-      ["/usr/bin/timeout", "90", "/usr/bin/bash", "-c", "test -f .ddev/commands/host/adminer || ddev add-on get ddev/ddev-adminer --version v1.4.1; ddev adminer"],
-      p.approot)
+      ["/usr/bin/bash", "-c", "test -f .ddev/commands/host/adminer || ddev add-on get ddev/ddev-adminer --version v1.4.1; ddev adminer"],
+      p.approot, 240)
   }
 
   function launchProject(p) {
     if (p.url) Qt.openUrlExternally(p.url)
+  }
+
+  function launchWpAdmin(p) {
+    if (p.url) Qt.openUrlExternally(p.url.replace(/\/+$/, "") + "/wp-admin/")
+  }
+
+  function copyUrl(p) {
+    if (!p.url) return
+    Quickshell.execDetached(["/usr/bin/wl-copy", p.url])
+    root.notify("Copied URL", p.url)
   }
 
   function launchMailpit(p) {
@@ -167,6 +256,16 @@ Item {
 
   function launchFolder(p) {
     if (p.approot) Qt.openUrlExternally(Util.fileUrl(p.approot))
+  }
+
+  // Login shells so the user's PATH (where omarchy-launch-editor and the
+  // terminal live) is available, same as Util.execDetached.
+  function launchEditor(p) {
+    if (p.approot) Quickshell.execDetached(["/usr/bin/bash", "-lc", "omarchy-launch-editor " + root.shQuote(p.approot)])
+  }
+
+  function launchTerminal(p) {
+    if (p.approot) Quickshell.execDetached(["/usr/bin/bash", "-lc", "xdg-terminal-exec --dir=" + root.shQuote(p.approot)])
   }
 
   Process {
@@ -179,7 +278,7 @@ Item {
     stdout: SplitParser {
       onRead: data => {
         if (data.length >= root.maxListBytes) {
-          root.errorText = "Project listing too large to display safely"
+          root.listError = "Project listing too large to display safely"
           return
         }
         try {
@@ -189,18 +288,22 @@ Item {
       }
     }
     onExited: function(exitCode) {
-      if (exitCode !== 0 && !root.loaded) root.errorText = "Couldn't reach DDEV — is Docker running?"
+      // A failed or empty-handed listing means DDEV/Docker couldn't be
+      // reached — including after earlier successes, when the cards would
+      // otherwise keep showing a state that's no longer true.
+      if (exitCode !== 0 || !root.listGotData) {
+        if (root.listError === "Project listing too large to display safely") return
+        root.listStale = root.loaded
+        root.listError = root.loaded
+          ? "Couldn't reach DDEV — is Docker running? Showing last known state."
+          : "Couldn't reach DDEV — is Docker running?"
+      }
     }
   }
 
   Process {
     id: actionProc
-    onExited: function(exitCode) {
-      if (exitCode !== 0) root.errorText = "ddev " + root.pendingAction + " failed for " + root.busyName
-      root.busyName = ""
-      root.pendingAction = ""
-      root.reloadProjects()
-    }
+    onExited: function(exitCode) { root.finishAction(exitCode) }
   }
 
   // One combined "name<TAB>0-or-1" line per running project — cheaper than
@@ -219,8 +322,10 @@ Item {
     }
   }
 
+  // ddev list queries Docker for every project, so poll gently; actions
+  // trigger an immediate reload on completion anyway.
   Timer {
-    interval: 4000
+    interval: 10000
     repeat: true
     running: root.opened
     onTriggered: root.reloadProjects()
@@ -231,11 +336,12 @@ Item {
   // Process/quickshell hiccup), this guarantees busyName always clears
   // instead of permanently disabling every button in the panel.
   Timer {
-    interval: 100000
+    interval: (root.pendingTimeout + 10) * 1000
     repeat: false
     running: root.busyName !== ""
     onTriggered: {
-      root.errorText = "'" + root.pendingAction + "' timed out for " + root.busyName
+      root.actionError = "ddev " + root.pendingAction + " timed out for " + root.subjectOf(root.busyName)
+      root.notify("DDEV: " + root.pendingAction + " timed out", root.actionError)
       root.busyName = ""
       root.pendingAction = ""
       root.reloadProjects()
@@ -271,7 +377,7 @@ Item {
           spacing: Style.space(10)
 
           PanelHero {
-            title: "DDEV Projects"
+            title: "DDEV Manager"
             meta: root.totalCount === 0 ? "" : (root.runningCount + " of " + root.totalCount + " running")
             foreground: root.foreground
             fontFamily: root.fontFamily
@@ -284,11 +390,37 @@ Item {
               }
             }
             trailingControl: Component {
-              PanelActionButton {
-                iconText: ""
-                tooltipText: "Refresh"
-                foreground: root.foreground
-                onClicked: root.reloadProjects()
+              Row {
+                spacing: Style.space(2)
+
+                PanelActionButton {
+                  id: powerOffButton
+                  readonly property bool busy: root.busyName === root.allProjects
+                  iconText: busy ? "\uf110" : "\uf011"
+                  tooltipText: "Stop all projects (ddev poweroff)"
+                  foreground: root.foreground
+                  hoverColor: Color.urgent
+                  enabled: root.runningCount > 0 && root.busyName === ""
+                  onClicked: root.powerOffAll()
+
+                  // Same spin treatment as the per-project start/stop button.
+                  transformOrigin: Item.Center
+                  RotationAnimation on rotation {
+                    from: 0
+                    to: 360
+                    duration: Style.duration(900)
+                    loops: Animation.Infinite
+                    running: powerOffButton.busy && !Style.reduceMotion
+                    onRunningChanged: if (!running) powerOffButton.rotation = 0
+                  }
+                }
+
+                PanelActionButton {
+                  iconText: "\uf021"
+                  tooltipText: "Refresh"
+                  foreground: root.foreground
+                  onClicked: root.manualRefresh()
+                }
               }
             }
           }
@@ -303,9 +435,9 @@ Item {
           }
 
           Text {
-            visible: root.errorText !== ""
+            visible: root.listError !== ""
             width: parent.width
-            text: root.errorText
+            text: root.listError
             color: Color.urgent
             wrapMode: Text.WordWrap
             font.family: root.fontFamily
@@ -313,7 +445,17 @@ Item {
           }
 
           Text {
-            visible: root.loaded && root.totalCount === 0 && root.errorText === ""
+            visible: root.actionError !== ""
+            width: parent.width
+            text: root.actionError
+            color: Color.urgent
+            wrapMode: Text.WordWrap
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          Text {
+            visible: root.loaded && root.totalCount === 0 && root.listError === ""
             width: parent.width
             topPadding: Style.space(20)
             bottomPadding: Style.space(20)
@@ -385,6 +527,9 @@ Item {
       color: Util.alpha(root.foreground, cardHover.hovered ? 0.06 : 0.03)
       border.color: Util.alpha(root.foreground, 0.12)
       border.width: 1
+      // Dim the last known state while DDEV is unreachable — the dots and
+      // statuses may no longer be true.
+      opacity: root.listStale ? 0.5 : 1
 
       readonly property bool isRunning: modelData.status === "running"
       readonly property bool isBusy: root.busyName === modelData.name
@@ -479,60 +624,104 @@ Item {
           }
         }
 
-        PanelActionButton {
-          iconText: ""
-          tooltipText: "Open in browser"
-          foreground: root.foreground
-          enabled: card.isRunning && card.modelData.url !== "" && root.busyName === ""
-          onClicked: root.launchProject(card.modelData)
-        }
+        // Buttons sit in their own tightly spaced Row: each already has a
+        // 22px hit/hover box, so the RowLayout's wider spacing between them
+        // would just waste room the project name needs.
+        Row {
+          spacing: Style.space(2)
+          Layout.alignment: Qt.AlignVCenter
 
-        PanelActionButton {
-          iconText: ""
-          tooltipText: "Open folder"
-          foreground: root.foreground
-          enabled: card.modelData.approot !== "" && root.busyName === ""
-          onClicked: root.launchFolder(card.modelData)
-        }
+          PanelActionButton {
+            iconText: ""
+            tooltipText: "Open in browser (right-click to copy URL)"
+            foreground: root.foreground
+            enabled: card.isRunning && card.modelData.url !== "" && root.busyName === ""
+            onClicked: root.launchProject(card.modelData)
 
-        PanelActionButton {
-          iconText: ""
-          tooltipText: "Open Mailpit (sent emails)"
-          foreground: root.foreground
-          enabled: card.isRunning && card.modelData.mailpitUrl !== "" && root.busyName === ""
-          onClicked: root.launchMailpit(card.modelData)
-        }
+            // Right-click copies the URL; left clicks fall through to the
+            // button's own MouseArea since this one doesn't accept them.
+            MouseArea {
+              anchors.fill: parent
+              acceptedButtons: Qt.RightButton
+              onClicked: root.copyUrl(card.modelData)
+            }
+          }
 
-        PanelActionButton {
-          iconText: ""
-          tooltipText: "Open DB Admin (Adminer) — installs and restarts the project on first use"
-          foreground: root.foreground
-          enabled: card.isRunning && root.busyName === ""
-          onClicked: root.openDbAdmin(card.modelData)
-        }
+          // Only WordPress projects get a wp-admin shortcut. Other rows keep
+          // the slot (invisible, inert) so button columns line up across cards.
+          PanelActionButton {
+            readonly property bool isWordPress: card.modelData.type === "wordpress"
+            iconText: ""
+            tooltipText: isWordPress ? "Open WordPress admin" : ""
+            foreground: root.foreground
+            opacity: isWordPress ? 1 : 0
+            enabled: isWordPress && card.isRunning && card.modelData.url !== "" && root.busyName === ""
+            onClicked: root.launchWpAdmin(card.modelData)
+          }
 
-        PanelActionButton {
-          id: powerButton
-          iconText: card.isBusy ?"" : (card.isRunning ? "" : "")
-          tooltipText: card.isRunning ? "Stop" : "Start"
-          foreground: root.foreground
-          hoverColor: card.isRunning ? Color.urgent : root.foreground
-          enabled: !card.isBusy && root.busyName === ""
-          onClicked: card.isRunning ? root.stopProject(card.modelData.name) : root.startProject(card.modelData.name)
+          PanelActionButton {
+            iconText: ""
+            tooltipText: "Open in editor"
+            foreground: root.foreground
+            enabled: card.modelData.approot !== ""
+            onClicked: root.launchEditor(card.modelData)
+          }
 
-          // Spin the busy spinner glyph, matching Ui/Button's iconSpinning.
-          // Rotating the whole button is safe: it's disabled while busy, so
-          // it has no hover fill or border to visibly turn with it.
-          transformOrigin: Item.Center
-          RotationAnimation on rotation {
-            from: 0
-            to: 360
-            duration: Style.duration(900)
-            loops: Animation.Infinite
-            running: card.isBusy && !Style.reduceMotion
-            // Snap back upright so the play/stop glyph that replaces the
-            // spinner isn't left tilted at whatever angle it stopped on.
-            onRunningChanged: if (!running) powerButton.rotation = 0
+          PanelActionButton {
+            iconText: ""
+            tooltipText: "Open terminal here"
+            foreground: root.foreground
+            enabled: card.modelData.approot !== ""
+            onClicked: root.launchTerminal(card.modelData)
+          }
+
+          PanelActionButton {
+            iconText: ""
+            tooltipText: "Open folder"
+            foreground: root.foreground
+            enabled: card.modelData.approot !== ""
+            onClicked: root.launchFolder(card.modelData)
+          }
+
+          PanelActionButton {
+            iconText: ""
+            tooltipText: "Open Mailpit (sent emails)"
+            foreground: root.foreground
+            enabled: card.isRunning && card.modelData.mailpitUrl !== "" && root.busyName === ""
+            onClicked: root.launchMailpit(card.modelData)
+          }
+
+          PanelActionButton {
+            iconText: ""
+            tooltipText: "Open DB Admin (Adminer) — installs and restarts the project on first use"
+            foreground: root.foreground
+            enabled: card.isRunning && root.busyName === ""
+            onClicked: root.openDbAdmin(card.modelData)
+          }
+
+          PanelActionButton {
+            id: powerButton
+            iconText: card.isBusy ? "" : (card.isRunning ? "" : "")
+            tooltipText: card.isRunning ? "Stop" : "Start"
+            foreground: root.foreground
+            hoverColor: card.isRunning ? Color.urgent : root.foreground
+            enabled: !card.isBusy && root.busyName === ""
+            onClicked: card.isRunning ? root.stopProject(card.modelData.name) : root.startProject(card.modelData.name)
+
+            // Spin the busy spinner glyph, matching Ui/Button's iconSpinning.
+            // Rotating the whole button is safe: it's disabled while busy, so
+            // it has no hover fill or border to visibly turn with it.
+            transformOrigin: Item.Center
+            RotationAnimation on rotation {
+              from: 0
+              to: 360
+              duration: Style.duration(900)
+              loops: Animation.Infinite
+              running: card.isBusy && !Style.reduceMotion
+              // Snap back upright so the play/stop glyph that replaces the
+              // spinner isn't left tilted at whatever angle it stopped on.
+              onRunningChanged: if (!running) powerButton.rotation = 0
+            }
           }
         }
       }
